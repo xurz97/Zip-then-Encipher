@@ -1,12 +1,11 @@
 // AES template
-#define MAX_KEY_BYTES 16
 #include <wmmintrin.h>
 #include <smmintrin.h>
 typedef unsigned char u8;
 
 typedef struct
 {
-    __m128i rd_key[7 + MAX_KEY_BYTES / 4];
+    __m128i rd_key[15];
 } AES_KEY;
 #define AES_ROUNDS(_key) (10)
 
@@ -20,10 +19,9 @@ static __m128i assist128(__m128i a, __m128i b)
 }
 
 static void AES_set_encrypt_key(const unsigned char *userKey,
-                                const int bits, AES_KEY *key)
+                                AES_KEY *key)
 {
     __m128i *sched = key->rd_key;
-    (void)bits; /* Supress "unused" warning */
     sched[0] = _mm_loadu_si128((__m128i *)userKey);
     sched[1] = assist128(sched[0], _mm_aeskeygenassist_si128(sched[0], 0x1));
     sched[2] = assist128(sched[1], _mm_aeskeygenassist_si128(sched[1], 0x2));
