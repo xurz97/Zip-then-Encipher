@@ -34,14 +34,21 @@ int main(int argc, char **argv)
     for (int i = 0; i < 4096; i++)
         pt[i] = i;
     ae_init(ctx, key, 32, 0, 0);
-    int pt_len=1024;
+    int pt_len=512;
+    printf("pt:\n");
     output(pt,pt_len);
     int iszip=-1;
     int zip_len=ae_encrypt(ctx, tweak, pt, pt_len, ct,&iszip);
     printf("iszip = %d\n",iszip);
+    printf("ct:\n");
     output(ct,pt_len);
     ae_decrypt(ctx, tweak, ct, pt_len, pt2,iszip,zip_len);
+    printf("pt2:\n");
     output(pt2,pt_len);
+    int sign=0;
+    for(int i=0;i<pt_len;i++) if(pt2[i]!=pt[i]) sign=1;
+    if(sign==0) printf("YES!\n");
+    else printf("NO!\n");
     ae_free(ctx);
     return 0;
 }

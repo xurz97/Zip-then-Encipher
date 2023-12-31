@@ -82,6 +82,15 @@ int ae_init(ae_ctx *ctx,
     AES_NI_set_decrypt_key((__m128i *)ctx->KEY2, (__m128i *)ctx->KEY);
     return 0;
 }
+void output2(unsigned char *arr, int num)
+{
+    for (int i = 0; i < num; i++)
+    {
+        printf("%02x", arr[i]);
+        if (i % 16 == 15)
+            printf("\n");
+    }
+}
 int ae_encrypt(ae_ctx *ctx,
                const u8 *nonce,
                const u8 *pt,
@@ -98,15 +107,23 @@ int ae_encrypt(ae_ctx *ctx,
         (char*)(compressedData),
         pt_len,
         maxCompressedSize);
-    printf("outputLen = %d\n",outputLen);
+    //printf("outputLen = %d\n",outputLen);
     int space = pt_len-outputLen;
-    printf("space = %d\n",space);
+    //printf("space = %d\n",space);
     if(space<24){
         HCTR_encrypt(pt, ct, nonce, pt_len, ctx);
         *iszip = 0; // no zip
         return pt_len;
     }
-    return pt_len;
+    ((uint64_t*)ct)[0]=123;
+    u8 tempNonce[16];
+    ((uint64_t*)tempNonce)[0]=((uint64_t*)nonce)[0];
+    ((uint64_t*)tempNonce)[1]=((uint64_t*)ct)[0];
+    for(int i=outputLen;i<pt_len-8;i++) compressedData[i]=0;
+    //output2(compressedData,pt_len-8);
+    HCTR_encrypt(compressedData, ct+8, tempNonce, pt_len-8, ctx);
+    *iszip = 1;
+    return outputLen;
 }
 
 void HCTR_encrypt(const unsigned char *pt,
@@ -174,6 +191,14 @@ void HCTR_encrypt(const unsigned char *pt,
     _mm_storeu_si128(&((__m128i *)ct)[0], ciphertext);
 }
 
+int ischeck(u8 *pt,int start,int end){
+    for(int i=start;i<end;i++){
+        if(pt[i]!=0) return -1;
+    }
+   
+    return 0;
+}
+
 int ae_decrypt(ae_ctx *ctx,
                const u8 *nonce,
                const u8 *ct,
@@ -183,7 +208,20 @@ int ae_decrypt(ae_ctx *ctx,
                int zip_len)
 {
     if(iszip==0) {HCTR_decrypt(ct, pt, nonce, ct_len, ctx);return ct_len;}
-
+    u8 tempNonce[16];
+    ((uint64_t*)tempNonce)[0]=((uint64_t*)nonce)[0];
+    ((uint64_t*)tempNonce)[1]=((uint64_t*)ct)[0];
+    u8 compressedData[4096];
+    HCTR_decrypt(ct+8, compressedData, tempNonce, ct_len-8, ctx);
+    if(ischeck(compressedData,zip_len,ct_len-8)) return -1;//验证失败
+    int decompressedSize = LZ4_decompress_safe(
+        (const char*)(compressedData),
+        (char*)(pt),
+        zip_len,
+        ct_len);
+    if (decompressedSize < 0) {
+        return -2;//解谜失败
+    }
     return ct_len;
 }
 void HCTR_decrypt(const unsigned char *ct,
