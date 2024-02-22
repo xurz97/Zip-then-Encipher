@@ -21,10 +21,10 @@ void output(unsigned char *arr, int num)
 }
 int main(int argc, char **argv)
 {
-    ALIGN(16) u8 key[32];
-    ALIGN(16) u8 pt[4096] = {0};
-    ALIGN(16) u8 pt2[4096] = {0};
-    ALIGN(16) u8 ct[4096] = {0};
+    u8 key[32];
+    u8 pt[4096] = {0};
+    u8 pt2[4096] = {0};
+    u8 ct[4096] = {0};
     ae_ctx *ctx = ae_allocate(NULL);
     ALIGN(16) u8 tweak[16];
     for (int i = 0; i < 16; i++)
