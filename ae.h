@@ -22,18 +22,17 @@ int ae_init(ae_ctx *ctx,
             int nonce_len,
             int tag_len);
 
-int ae_encrypt(ae_ctx *ctx,
+void ae_encrypt(ae_ctx *ctx,
                const u8 *nonce,
                const u8 *pt,
                int pt_len,
                u8 *ct,
                int *iszip);
 
-int ae_decrypt(ae_ctx *ctx,
+void ae_decrypt(ae_ctx *ctx,
                const u8 *nonce,
                const u8 *ct,
                int ct_len,
                u8 *pt,
-               int iszip,
-               int zip_len);
+               int iszip);
 #endif

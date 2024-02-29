@@ -188,7 +188,11 @@ void HCTR_encrypt_8(const unsigned char *pt,
                   int pt_len,
                   ae_ctx *ctx);
 
-
+void HCTR_decrypt_8(const unsigned char *ct,
+                  unsigned char *pt,
+                  const unsigned char *tweak,
+                  int ct_len,
+                  ae_ctx *ctx);
 int ae_init(ae_ctx *ctx,
             const u8 *key,
             int key_len,
@@ -213,7 +217,7 @@ void output2(unsigned char *arr, int num)
             printf("\n");
     }
 }
-int ae_encrypt(ae_ctx *ctx,
+void ae_encrypt(ae_ctx *ctx,
                const u8 *nonce,
                const u8 *pt,
                int pt_len,
@@ -222,6 +226,7 @@ int ae_encrypt(ae_ctx *ctx,
 {
     //尝试压缩
     int maxCompressedSize = LZ4_compressBound(pt_len);
+    //printf("maxsize = %d\n",maxCompressedSize);
     u8 compressedData[8192];
     // 压缩数据
     int outputLen = LZ4_compress_default(
@@ -233,23 +238,23 @@ int ae_encrypt(ae_ctx *ctx,
     //printf("outputLen = %d\n",outputLen);
     int space = pt_len-outputLen;
     //printf("space = %d\n",space);
-    if(space<24){
+    if(space<32){
         HCTR_encrypt_8(pt, ct, nonce, pt_len, ctx);
         *iszip = 0; // no zip
-        return pt_len;
+        return ;
     }
     //printf("space=%d\n",space);
-    ((uint64_t*)ct)[0]=123;
-    ((uint64_t*)ct)[1]=0;
+    ((uint64_t*)ct)[0]=outputLen;
+    ((uint64_t*)ct)[1]=123;
     u8 tempNonce[16];
     ((uint64_t*)tempNonce)[0]=((uint64_t*)nonce)[0];
-    ((uint64_t*)tempNonce)[1]=((uint64_t*)ct)[0];
-    for(int i=outputLen;i<pt_len-8;i++) compressedData[i]=0;
+    ((uint64_t*)tempNonce)[1]=((uint64_t*)ct)[1];
+    for(int i=outputLen;i<pt_len-16;i++) compressedData[i]=0;
     //output2(compressedData,pt_len-8);
     u8* newct=&ct[16];
     HCTR_encrypt_8(compressedData, newct, tempNonce, pt_len-16, ctx);
     *iszip = 1;
-    return outputLen;
+    return ;
 }
 
 void HCTR_encrypt(const unsigned char *pt,
@@ -321,34 +326,39 @@ int ischeck(u8 *pt,int start,int end){
     for(int i=start;i<end;i++){
         if(pt[i]!=0) return -1;
     }
-   
     return 0;
 }
 
-int ae_decrypt(ae_ctx *ctx,
+void ae_decrypt(ae_ctx *ctx,
                const u8 *nonce,
                const u8 *ct,
                int ct_len,
                u8 *pt,
-               int iszip,
-               int zip_len)
+               int iszip)
 {
-    if(iszip==0) {HCTR_decrypt(ct, pt, nonce, ct_len, ctx);return ct_len;}
+    if(iszip==0) {HCTR_decrypt_8(ct, pt, nonce, ct_len, ctx);return ;}
     u8 tempNonce[16];
     ((uint64_t*)tempNonce)[0]=((uint64_t*)nonce)[0];
-    ((uint64_t*)tempNonce)[1]=((uint64_t*)ct)[0];
-    u8 compressedData[4096];
-    HCTR_decrypt(ct+16, compressedData, tempNonce, ct_len-16, ctx);
-    if(ischeck(compressedData,zip_len,ct_len-16)) return -1;//验证失败
+    ((uint64_t*)tempNonce)[1]=((uint64_t*)ct)[1];
+    u8 compressedData[8192];
+    HCTR_decrypt_8(ct+16, compressedData, tempNonce, ct_len-16, ctx);
+    int zip_len=((uint64_t*)ct)[0];
+    u8* temp=&compressedData[ct_len-32];
+    //printf("compressData:\n");
+    //output2(compressedData,ct_len-16);
+    //printf("%ld %ld\n",((uint64_t*)temp)[0],((uint64_t*)temp)[1]);
+    if(((uint64_t*)temp)[0]||((uint64_t*)temp)[1]){
+        printf("verify bad!\n");
+    }
     int decompressedSize = LZ4_decompress_safe(
         (const char*)(compressedData),
         (char*)(pt),
         zip_len,
         ct_len);
     if (decompressedSize < 0) {
-        return -2;//解谜失败
+        printf("decompressed bad!\n");
     }
-    return ct_len;
+    return ;
 }
 void HCTR_decrypt(const unsigned char *ct,
                   unsigned char *pt,
@@ -421,6 +431,7 @@ void HCTR_encrypt_8(const unsigned char *pt,
                   int pt_len,
                   ae_ctx *ctx)
 {
+    //printf("encrypt 8");
     __m128i Z1 = _mm_loadu_si128((__m128i *)pt), Z2;
     __m128i D = _mm_setzero_si128(), hash2 = _mm_setzero_si128(), lenswap = _mm_setzero_si128();
     __m128i BSWAP_EPI64 = _mm_set_epi8(8, 9, 10, 11, 12, 13, 14, 15, 0, 1, 2, 3, 4, 5, 6, 7);
@@ -627,6 +638,224 @@ void HCTR_encrypt_8(const unsigned char *pt,
     ciphertext = _mm_xor_si128(Z2, hash2);
     _mm_storeu_si128(&((__m128i *)ct)[0], ciphertext);
 }
+
+
+
+void HCTR_decrypt_8(const unsigned char *ct,
+                  unsigned char *pt,
+                  const unsigned char *tweak,
+                  int ct_len,
+                  ae_ctx *ctx)
+{
+    //printf("decrypt 8");
+    __m128i Z1 = _mm_loadu_si128((__m128i *)ct), Z2;
+    __m128i D = _mm_setzero_si128(), hash2 = _mm_setzero_si128(), lenswap = _mm_setzero_si128();
+    __m128i BSWAP_EPI64 = _mm_set_epi8(8, 9, 10, 11, 12, 13, 14, 15, 0, 1, 2, 3, 4, 5, 6, 7);
+    __m128i BSWAP_MASK = _mm_set_epi8(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
+    __m128i ONE = _mm_set_epi32(0, 1, 0, 0);
+    __m128i EIGHT = _mm_set_epi32(0, 8, 0, 0);
+    __m128i ctr1 = _mm_setzero_si128();
+    __m128i ctr2, ctr3, ctr4, ctr5, ctr6, ctr7, ctr8;
+    __m128i tmp1, tmp2, tmp3, tmp4, tmp5, tmp6, tmp7, tmp8, tweakswap, ciphertext, Z1Z2;
+    __m128i H = _mm_loadu_si128((__m128i *)ctx->key2), H2, H3, H4, H5, H6, H7, H8;
+    int i = 0;
+    
+    lenswap = _mm_insert_epi64(lenswap, ct_len * 8, 0);
+    H = _mm_shuffle_epi8(H, BSWAP_MASK);
+    gfmul1(H, H, &H2);
+    gfmul1(H, H2, &H3);
+    gfmul1(H, H3, &H4);
+    gfmul1(H, H4, &H5);
+    gfmul1(H, H5, &H6);
+    gfmul1(H, H6, &H7);
+    gfmul1(H, H7, &H8);
+    H = multx(H);
+    H2 = multx(H2);
+    H3 = multx(H3);
+    H4 = multx(H4);
+    H5 = multx(H5);
+    H6 = multx(H6);
+    H7 = multx(H7);
+    H8 = multx(H8);
+    
+    for (i = 0; i < (ct_len - 16) / 128; i++)
+    {
+        tmp1 = _mm_shuffle_epi8(_mm_loadu_si128(&((__m128i *)ct)[8 * i + 1]), BSWAP_MASK);
+        tmp2 = _mm_shuffle_epi8(_mm_loadu_si128(&((__m128i *)ct)[8 * i + 2]), BSWAP_MASK);
+        tmp3 = _mm_shuffle_epi8(_mm_loadu_si128(&((__m128i *)ct)[8 * i + 3]), BSWAP_MASK);
+        tmp4 = _mm_shuffle_epi8(_mm_loadu_si128(&((__m128i *)ct)[8 * i + 4]), BSWAP_MASK);
+        tmp5 = _mm_shuffle_epi8(_mm_loadu_si128(&((__m128i *)ct)[8 * i + 5]), BSWAP_MASK);
+        tmp6 = _mm_shuffle_epi8(_mm_loadu_si128(&((__m128i *)ct)[8 * i + 6]), BSWAP_MASK);
+        tmp7 = _mm_shuffle_epi8(_mm_loadu_si128(&((__m128i *)ct)[8 * i + 7]), BSWAP_MASK);
+        tmp8 = _mm_shuffle_epi8(_mm_loadu_si128(&((__m128i *)ct)[8 * i + 8]), BSWAP_MASK);
+        tmp1 = _mm_xor_si128(D, tmp1);
+        reduce8(H, H2, H3, H4, H5, H6, H7, H8, tmp8, tmp7, tmp6, tmp5, tmp4, tmp3, tmp2, tmp1, &D);
+    }
+    
+    for (i = 8 * i + 1; i < ct_len / 16; i++)
+    {
+        tmp1 = _mm_load_si128(&((__m128i *)ct)[i]);
+        tmp1 = _mm_shuffle_epi8(tmp1, BSWAP_MASK);
+        D = _mm_xor_si128(D, tmp1);
+        gfmul(D, H, &D);
+    }
+    tweakswap = _mm_shuffle_epi8(_mm_loadu_si128((__m128i *)tweak), BSWAP_MASK);
+    D = _mm_xor_si128(D, tweakswap);
+    gfmul(D, H, &D);
+    D = _mm_xor_si128(D, lenswap);
+    gfmul(D, H, &D);
+    D = _mm_shuffle_epi8(D, BSWAP_MASK);
+    Z1 = _mm_xor_si128(Z1, D);
+    __m128i *KEY = (__m128i *)ctx->KEY2;
+    tmp1 = _mm_xor_si128(Z1, KEY[0]);
+    for (i = 1; i < 10; i++)
+        tmp1 = _mm_aesdec_si128(tmp1, KEY[i]);
+    Z2 = _mm_aesdeclast_si128(tmp1, KEY[10]);
+    Z1Z2 = _mm_xor_si128(Z1, Z2);
+    ctr1 = _mm_add_epi64(ctr1, ONE);
+    ctr2 = _mm_add_epi64(ctr1, ONE);
+    ctr3 = _mm_add_epi64(ctr2, ONE);
+    ctr4 = _mm_add_epi64(ctr3, ONE);
+    ctr5 = _mm_add_epi64(ctr4, ONE);
+    ctr6 = _mm_add_epi64(ctr5, ONE);
+    ctr7 = _mm_add_epi64(ctr6, ONE);
+    ctr8 = _mm_add_epi64(ctr7, ONE);
+    //printf("pt_len=%d\n",pt_len);
+    KEY = (__m128i *)ctx->KEY;
+    for (i = 0; i < (ct_len - 16) / 128; i++)
+    {
+        //printf("i=%d\n",i);
+        tmp1 = _mm_shuffle_epi8(ctr1, BSWAP_EPI64);
+        tmp2 = _mm_shuffle_epi8(ctr2, BSWAP_EPI64);
+        tmp3 = _mm_shuffle_epi8(ctr3, BSWAP_EPI64);
+        tmp4 = _mm_shuffle_epi8(ctr4, BSWAP_EPI64);
+        tmp5 = _mm_shuffle_epi8(ctr5, BSWAP_EPI64);
+        tmp6 = _mm_shuffle_epi8(ctr6, BSWAP_EPI64);
+        tmp7 = _mm_shuffle_epi8(ctr7, BSWAP_EPI64);
+        tmp8 = _mm_shuffle_epi8(ctr8, BSWAP_EPI64);
+        
+        ctr1 = _mm_add_epi64(ctr1, EIGHT);
+        ctr2 = _mm_add_epi64(ctr2, EIGHT);
+        ctr3 = _mm_add_epi64(ctr3, EIGHT);
+        ctr4 = _mm_add_epi64(ctr4, EIGHT);
+        ctr5 = _mm_add_epi64(ctr5, EIGHT);
+        ctr6 = _mm_add_epi64(ctr6, EIGHT);
+        ctr7 = _mm_add_epi64(ctr7, EIGHT);
+        ctr8 = _mm_add_epi64(ctr8, EIGHT);
+        tmp1 = _mm_xor_si128(Z1Z2, tmp1);
+        tmp2 = _mm_xor_si128(Z1Z2, tmp2);
+        tmp3 = _mm_xor_si128(Z1Z2, tmp3);
+        tmp4 = _mm_xor_si128(Z1Z2, tmp4);
+        tmp5 = _mm_xor_si128(Z1Z2, tmp5);
+        tmp6 = _mm_xor_si128(Z1Z2, tmp6);
+        tmp7 = _mm_xor_si128(Z1Z2, tmp7);
+        tmp8 = _mm_xor_si128(Z1Z2, tmp8);
+        tmp1 = _mm_xor_si128(tmp1, KEY[0]);
+        tmp2 = _mm_xor_si128(tmp2, KEY[0]);
+        tmp3 = _mm_xor_si128(tmp3, KEY[0]);
+        tmp4 = _mm_xor_si128(tmp4, KEY[0]);
+        tmp5 = _mm_xor_si128(tmp5, KEY[0]);
+        tmp6 = _mm_xor_si128(tmp6, KEY[0]);
+        tmp7 = _mm_xor_si128(tmp7, KEY[0]);
+        tmp8 = _mm_xor_si128(tmp8, KEY[0]);
+        
+        for (int j = 1; j < 10 - 1; j += 2)
+        {
+            tmp1 = _mm_aesenc_si128(tmp1, KEY[j]);
+            tmp2 = _mm_aesenc_si128(tmp2, KEY[j]);
+            tmp3 = _mm_aesenc_si128(tmp3, KEY[j]);
+            tmp4 = _mm_aesenc_si128(tmp4, KEY[j]);
+            tmp5 = _mm_aesenc_si128(tmp5, KEY[j]);
+            tmp6 = _mm_aesenc_si128(tmp6, KEY[j]);
+            tmp7 = _mm_aesenc_si128(tmp7, KEY[j]);
+            tmp8 = _mm_aesenc_si128(tmp8, KEY[j]);
+            tmp1 = _mm_aesenc_si128(tmp1, KEY[j + 1]);
+            tmp2 = _mm_aesenc_si128(tmp2, KEY[j + 1]);
+            tmp3 = _mm_aesenc_si128(tmp3, KEY[j + 1]);
+            tmp4 = _mm_aesenc_si128(tmp4, KEY[j + 1]);
+            tmp5 = _mm_aesenc_si128(tmp5, KEY[j + 1]);
+            tmp6 = _mm_aesenc_si128(tmp6, KEY[j + 1]);
+            tmp7 = _mm_aesenc_si128(tmp7, KEY[j + 1]);
+            tmp8 = _mm_aesenc_si128(tmp8, KEY[j + 1]);
+        }
+        
+        tmp1 = _mm_aesenc_si128(tmp1, KEY[10 - 1]);
+        tmp2 = _mm_aesenc_si128(tmp2, KEY[10 - 1]);
+        tmp3 = _mm_aesenc_si128(tmp3, KEY[10 - 1]);
+        tmp4 = _mm_aesenc_si128(tmp4, KEY[10 - 1]);
+        tmp5 = _mm_aesenc_si128(tmp5, KEY[10 - 1]);
+        tmp6 = _mm_aesenc_si128(tmp6, KEY[10 - 1]);
+        tmp7 = _mm_aesenc_si128(tmp7, KEY[10 - 1]);
+        tmp8 = _mm_aesenc_si128(tmp8, KEY[10 - 1]);
+        tmp1 = _mm_aesenclast_si128(tmp1, KEY[10]);
+        tmp2 = _mm_aesenclast_si128(tmp2, KEY[10]);
+        tmp3 = _mm_aesenclast_si128(tmp3, KEY[10]);
+        tmp4 = _mm_aesenclast_si128(tmp4, KEY[10]);
+        tmp5 = _mm_aesenclast_si128(tmp5, KEY[10]);
+        tmp6 = _mm_aesenclast_si128(tmp6, KEY[10]);
+        tmp7 = _mm_aesenclast_si128(tmp7, KEY[10]);
+        tmp8 = _mm_aesenclast_si128(tmp8, KEY[10]);
+        tmp1 = _mm_xor_si128(tmp1, _mm_load_si128(&((__m128i *)ct)[i * 8 + 1]));
+        tmp2 = _mm_xor_si128(tmp2, _mm_load_si128(&((__m128i *)ct)[i * 8 + 2]));
+        tmp3 = _mm_xor_si128(tmp3, _mm_load_si128(&((__m128i *)ct)[i * 8 + 3]));
+        tmp4 = _mm_xor_si128(tmp4, _mm_load_si128(&((__m128i *)ct)[i * 8 + 4]));
+        tmp5 = _mm_xor_si128(tmp5, _mm_load_si128(&((__m128i *)ct)[i * 8 + 5]));
+        tmp6 = _mm_xor_si128(tmp6, _mm_load_si128(&((__m128i *)ct)[i * 8 + 6]));
+        tmp7 = _mm_xor_si128(tmp7, _mm_load_si128(&((__m128i *)ct)[i * 8 + 7]));
+        tmp8 = _mm_xor_si128(tmp8, _mm_load_si128(&((__m128i *)ct)[i * 8 + 8]));
+        //printf("%d\n",i*8+1);
+        _mm_store_si128(&((__m128i *)pt)[i * 8 + 1], tmp1);
+        _mm_store_si128(&((__m128i *)pt)[i * 8 + 2], tmp2);
+        _mm_store_si128(&((__m128i *)pt)[i * 8 + 3], tmp3);
+        _mm_store_si128(&((__m128i *)pt)[i * 8 + 4], tmp4);
+        _mm_store_si128(&((__m128i *)pt)[i * 8 + 5], tmp5);
+        _mm_store_si128(&((__m128i *)pt)[i * 8 + 6], tmp6);
+        _mm_store_si128(&((__m128i *)pt)[i * 8 + 7], tmp7);
+        _mm_store_si128(&((__m128i *)pt)[i * 8 + 8], tmp8);
+        //printf("hello\n");
+        tmp1 = _mm_shuffle_epi8(tmp1, BSWAP_MASK);
+        tmp2 = _mm_shuffle_epi8(tmp2, BSWAP_MASK);
+        tmp3 = _mm_shuffle_epi8(tmp3, BSWAP_MASK);
+        tmp4 = _mm_shuffle_epi8(tmp4, BSWAP_MASK);
+        tmp5 = _mm_shuffle_epi8(tmp5, BSWAP_MASK);
+        tmp6 = _mm_shuffle_epi8(tmp6, BSWAP_MASK);
+        tmp7 = _mm_shuffle_epi8(tmp7, BSWAP_MASK);
+        tmp8 = _mm_shuffle_epi8(tmp8, BSWAP_MASK);
+        tmp1 = _mm_xor_si128(hash2, tmp1);
+        reduce8(H, H2, H3, H4, H5, H6, H7, H8, tmp8, tmp7, tmp6, tmp5, tmp4, tmp3, tmp2, tmp1, &hash2);
+    }
+    for (i = 8 * i + 1; i < ct_len / 16; i++)
+    {
+        tmp1 = _mm_shuffle_epi8(ctr1, BSWAP_EPI64);
+        ctr1 = _mm_add_epi64(ctr1, ONE);
+        tmp1 = _mm_xor_si128(Z1Z2, tmp1);
+        tmp1 = _mm_xor_si128(tmp1, KEY[0]);
+        tmp1 = _mm_aesenc_si128(tmp1, KEY[1]);
+        tmp1 = _mm_aesenc_si128(tmp1, KEY[2]);
+        tmp1 = _mm_aesenc_si128(tmp1, KEY[3]);
+        tmp1 = _mm_aesenc_si128(tmp1, KEY[4]);
+        tmp1 = _mm_aesenc_si128(tmp1, KEY[5]);
+        tmp1 = _mm_aesenc_si128(tmp1, KEY[6]);
+        tmp1 = _mm_aesenc_si128(tmp1, KEY[7]);
+        tmp1 = _mm_aesenc_si128(tmp1, KEY[8]);
+        tmp1 = _mm_aesenc_si128(tmp1, KEY[9]);
+        tmp1 = _mm_aesenclast_si128(tmp1, KEY[10]);
+        tmp1 = _mm_xor_si128(tmp1, _mm_load_si128(&((__m128i *)ct)[i]));
+        _mm_store_si128(&((__m128i *)pt)[i], tmp1);
+        tmp1 = _mm_shuffle_epi8(tmp1, BSWAP_MASK);
+        hash2 = _mm_xor_si128(hash2, tmp1);
+        gfmul(hash2, H, &hash2);
+    }
+    hash2 = _mm_xor_si128(hash2, tweakswap);
+    gfmul(hash2, H, &hash2);
+    hash2 = _mm_xor_si128(hash2, lenswap);
+    gfmul(hash2, H, &hash2);
+    hash2 = _mm_shuffle_epi8(hash2, BSWAP_MASK);
+    ciphertext = _mm_xor_si128(Z2, hash2);
+    _mm_storeu_si128(&((__m128i *)pt)[0], ciphertext);
+}
+
+
 #define USE_MM_MALLOC ((__SSE2__ || _M_IX86_FP >= 2) && !(_M_X64 || __x86_64__))
 #define USE_POSIX_MEMALIGN (__ALTIVEC__ && __GLIBC__ && !__PPC64__)
 
