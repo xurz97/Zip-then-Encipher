@@ -228,31 +228,22 @@ void ae_encrypt(ae_ctx *ctx,
     int maxCompressedSize = LZ4_compressBound(pt_len);
     //printf("maxsize = %d\n",maxCompressedSize);
     u8 compressedData[8192];
+    memset(compressedData,0,sizeof(compressedData));
     // 压缩数据
     int outputLen = LZ4_compress_default(
         (const char*)(pt),
-        (char*)(compressedData),
+        (char*)(compressedData+16),
         pt_len,
         maxCompressedSize);
-    //printf("pt_len = %d\n",pt_len);
-    //printf("outputLen = %d\n",outputLen);
     int space = pt_len-outputLen;
-    //printf("space = %d\n",space);
     if(space<32){
         HCTR_encrypt_8(pt, ct, nonce, pt_len, ctx);
         *iszip = 0; // no zip
         return ;
     }
-    //printf("space=%d\n",space);
-    ((uint64_t*)ct)[0]=outputLen;
-    ((uint64_t*)ct)[1]=123;
-    u8 tempNonce[16];
-    ((uint64_t*)tempNonce)[0]=((uint64_t*)nonce)[0];
-    ((uint64_t*)tempNonce)[1]=((uint64_t*)ct)[1];
-    for(int i=outputLen;i<pt_len-16;i++) compressedData[i]=0;
-    //output2(compressedData,pt_len-8);
-    u8* newct=&ct[16];
-    HCTR_encrypt_8(compressedData, newct, tempNonce, pt_len-16, ctx);
+    ((uint64_t*)compressedData)[0]=outputLen;
+    ((uint64_t*)compressedData)[1]=123;
+    HCTR_encrypt_8(compressedData, ct, nonce, pt_len, ctx);
     *iszip = 1;
     return ;
 }
@@ -337,13 +328,10 @@ void ae_decrypt(ae_ctx *ctx,
                int iszip)
 {
     if(iszip==0) {HCTR_decrypt_8(ct, pt, nonce, ct_len, ctx);return ;}
-    u8 tempNonce[16];
-    ((uint64_t*)tempNonce)[0]=((uint64_t*)nonce)[0];
-    ((uint64_t*)tempNonce)[1]=((uint64_t*)ct)[1];
     u8 compressedData[8192];
-    HCTR_decrypt_8(ct+16, compressedData, tempNonce, ct_len-16, ctx);
-    int zip_len=((uint64_t*)ct)[0];
-    u8* temp=&compressedData[ct_len-32];
+    HCTR_decrypt_8(ct, compressedData, nonce, ct_len, ctx);
+    int zip_len=((uint64_t*)compressedData)[0];
+    u8* temp=&compressedData[ct_len-16];
     //printf("compressData:\n");
     //output2(compressedData,ct_len-16);
     //printf("%ld %ld\n",((uint64_t*)temp)[0],((uint64_t*)temp)[1]);
@@ -351,7 +339,7 @@ void ae_decrypt(ae_ctx *ctx,
         printf("verify bad!\n");
     }
     int decompressedSize = LZ4_decompress_safe(
-        (const char*)(compressedData),
+        (const char*)(compressedData+16),
         (char*)(pt),
         zip_len,
         ct_len);

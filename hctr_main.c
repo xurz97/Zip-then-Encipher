@@ -34,15 +34,16 @@ int main(int argc, char **argv)
     for (int i = 0; i < 4096; i++)
         pt[i] = i;
     ae_init(ctx, key, 32, 0, 0);
-    char partname[30];
-    sprintf(partname, "./part/part_1456");
-    FILE *fin=fopen(partname,"rb");
-    int ret=fread(pt, 1, 4096, fin);
+    //char partname[30];
+    //sprintf(partname, "./part/part_1456");
+   // FILE *fin=fopen(partname,"rb");
+    //int ret=fread(pt, 1, 4096, fin);
     int pt_len=4096;
     //printf("pt:\n");
     //output(pt,pt_len);
     int iszip=-1;
     ae_encrypt(ctx, tweak, pt, pt_len, ct,&iszip);
+    printf("iszip = %d\n",iszip);
     //printf("ct:\n");
     //output(ct,pt_len);
     ae_decrypt(ctx, tweak, ct, pt_len, pt2,iszip);
